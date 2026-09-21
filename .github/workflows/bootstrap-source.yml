@@ -22,7 +22,33 @@ jobs:
             echo "Bootstrap files already removed."
             exit 0
           fi
-          cat .bootstrap/part-*.b64 | base64 --decode > /tmp/codex-leancontext-source.zip
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+
+          parts = [Path(f".bootstrap/part-{i:02d}.b64").read_text() for i in range(1, 6)]
+          expected_part2_blob = "1197e6a5eca99f129eb797fe6ccf54f3e9a8585d"
+
+          def git_blob_sha(text: str) -> str:
+              payload = text.encode()
+              return hashlib.sha1(f"blob {len(payload)}\0".encode() + payload).hexdigest()
+
+          if git_blob_sha(parts[1]) != expected_part2_blob:
+              repaired = None
+              for i in range(len(parts[1])):
+                  candidate = parts[1][:i] + parts[1][i + 1:]
+                  if git_blob_sha(candidate) == expected_part2_blob:
+                      repaired = candidate
+                      print(f"Repaired part-02 by removing one extra character at offset {i}.")
+                      break
+              if repaired is None:
+                  raise SystemExit("Unable to repair part-02")
+              parts[1] = repaired
+
+          Path("/tmp/source.b64").write_text("".join(parts))
+          PY
+          base64 --decode /tmp/source.b64 > /tmp/codex-leancontext-source.zip
+          echo "91cbdd0254e2f555c0fb8de3af0d9f1ec3d4ce69c4a64f5a31a44c2ce6987538  /tmp/codex-leancontext-source.zip" | sha256sum --check -
           unzip -oq /tmp/codex-leancontext-source.zip -d .
           rm -rf .bootstrap
           git config user.name "github-actions[bot]"
