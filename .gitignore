@@ -1,0 +1,7 @@
+.worktrees/
+node_modules/
+dist/
+coverage/
+.superpowers/
+benchmark/results/
+*.tgz

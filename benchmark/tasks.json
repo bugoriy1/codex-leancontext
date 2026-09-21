@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "tasks": [
+    {
+      "id": "self-context-plan",
+      "task": "Improve task-aware context planning without weakening the safety guard",
+      "verification": "npm test && npm run typecheck && npm run lint"
+    }
+  ]
+}
