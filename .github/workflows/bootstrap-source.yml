@@ -13,13 +13,13 @@ permissions:
 
 jobs:
   unpack:
-    if: ${{ hashFiles('.bootstrap/part-01.b64') != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Reconstruct source archive
+        if: ${{ hashFiles('.bootstrap/part-01.b64') != '' }}
         shell: bash
         run: |
           cat .bootstrap/part-*.b64 | base64 --decode > /tmp/codex-leancontext-source.zip
