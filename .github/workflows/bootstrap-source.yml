@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - feat/leancontext-v0.1
-    paths:
-      - '.bootstrap/**'
-      - '.github/workflows/bootstrap-source.yml'
 
 permissions:
   contents: write
@@ -19,9 +16,12 @@ jobs:
         with:
           fetch-depth: 0
       - name: Reconstruct source archive
-        if: ${{ hashFiles('.bootstrap/part-01.b64') != '' }}
         shell: bash
         run: |
+          if [ ! -f .bootstrap/part-01.b64 ]; then
+            echo "Bootstrap files already removed."
+            exit 0
+          fi
           cat .bootstrap/part-*.b64 | base64 --decode > /tmp/codex-leancontext-source.zip
           unzip -oq /tmp/codex-leancontext-source.zip -d .
           rm -rf .bootstrap
