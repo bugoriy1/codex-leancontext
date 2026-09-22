@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 env:
-  AB_MODEL: gpt-5.6
+  AB_MODEL: gpt-5.6-sol
   AB_EFFORT: medium
   AB_TASK: >-
     Extend LeanContext's context-safety classifier so tasks involving OAuth or OIDC,
