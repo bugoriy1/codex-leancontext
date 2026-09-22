@@ -1,0 +1,156 @@
+name: LeanContext CI
+
+on:
+  push:
+    branches:
+      - main
+      - feat/leancontext-v0.1
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: LeanContext CI
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Tests
+        id: tests
+        continue-on-error: true
+        run: npm test
+
+      - name: Typecheck
+        id: typecheck
+        continue-on-error: true
+        run: npm run typecheck
+
+      - name: Lint
+        id: lint
+        continue-on-error: true
+        run: npm run lint
+
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: npm run build
+
+      - name: Package dry-run
+        id: pack
+        continue-on-error: true
+        run: npm run pack:check
+
+      - name: Planning benchmark
+        id: benchmark
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          node dist/src/cli/main.js benchmark "Add secure task-aware context retrieval without reducing implementation quality" . > benchmark-report.json
+          cat benchmark-report.json
+
+      - name: Benchmark artifact
+        if: always() && hashFiles('benchmark-report.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: leancontext-benchmark-report
+          path: benchmark-report.json
+          retention-days: 30
+
+      - name: Write job summary
+        if: always()
+        env:
+          TESTS: ${{ steps.tests.outcome }}
+          TYPECHECK: ${{ steps.typecheck.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          PACK: ${{ steps.pack.outcome }}
+          BENCHMARK: ${{ steps.benchmark.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const ok = value => value === 'success' ? '✅ PASS' : '❌ FAIL';
+          const checks = {
+            Tests: process.env.TESTS,
+            Typecheck: process.env.TYPECHECK,
+            Lint: process.env.LINT,
+            Build: process.env.BUILD,
+            Packaging: process.env.PACK,
+          };
+
+          let report = null;
+          if (fs.existsSync('benchmark-report.json')) {
+            report = JSON.parse(fs.readFileSync('benchmark-report.json', 'utf8'));
+          }
+
+          const verificationPassed = Object.values(checks).every(v => v === 'success');
+          const benchmarkPassed = process.env.BENCHMARK === 'success';
+          const overall = verificationPassed && benchmarkPassed;
+
+          const lines = [
+            '# Codex LeanContext — CI result',
+            '',
+            `## Overall: ${overall ? '✅ PASS' : '❌ FAIL'}`,
+            '',
+            '| Check | Result |',
+            '|---|---|',
+            ...Object.entries(checks).map(([name, value]) => `| ${name} | ${ok(value)} |`),
+            `| Planning benchmark | ${ok(process.env.BENCHMARK)} |`,
+            '',
+          ];
+
+          if (report) {
+            const c = report.comparison;
+            lines.push(
+              '## Planning benchmark',
+              '',
+              '| Metric | Result |',
+              '|---|---:|',
+              `| Baseline estimated context | ${report.baseline.inputTokens ?? 'n/a'} tokens |`,
+              `| LeanContext estimated context | ${report.leanContext.inputTokens ?? 'n/a'} tokens |`,
+              `| Estimated reduction | ${c.savedPercent ?? 'n/a'}% |`,
+              `| Files: baseline → LeanContext | ${report.baseline.filesInspected} → ${report.leanContext.filesInspected} |`,
+              `| Measurement | ${report.baseline.measurement} |`,
+              `| Release-grade A/B gate | ${c.releaseGatePassed ? '✅ PASS' : '⏳ NOT YET'} |`,
+              '',
+              '> The percentage above is a deterministic planning estimate, not measured Codex token savings.',
+              '> Real effectiveness requires two actual Codex runs with identical task/model/commit and successful verification.',
+              ''
+            );
+          }
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n'));
+          NODE
+
+      - name: Final CI gate
+        if: always()
+        env:
+          TESTS: ${{ steps.tests.outcome }}
+          TYPECHECK: ${{ steps.typecheck.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          PACK: ${{ steps.pack.outcome }}
+          BENCHMARK: ${{ steps.benchmark.outcome }}
+        run: |
+          test "$TESTS" = success
+          test "$TYPECHECK" = success
+          test "$LINT" = success
+          test "$BUILD" = success
+          test "$PACK" = success
+          test "$BENCHMARK" = success
