@@ -66,3 +66,15 @@ test('rejects source retrieval when the indexed file changed after planning', as
   await writeFile(path.join(root, 'src', 'service.ts'), 'export function completelyDifferent() { return 99; }\n');
   await assert.rejects(() => getContext(index, plan), /index is stale/i);
 });
+
+test('downgrades an oversized symbol slice and caps metadata arrays', async () => {
+  const root = await repo();
+  await writeFile(path.join(root, 'src', 'huge.ts'), `export function huge() { return '${'x'.repeat(2_000_000)}'; }`);
+  const index = await buildIndex({ root });
+  const huge = index.files.find((file) => file.path === 'src/huge.ts')!;
+  const mutated = { ...index, files: [{ ...huge, symbols: Array.from({ length: 100 }, (_, i) => ({ name: `symbol${i}`, kind: 'function' as const, startLine: 1, endLine: 1, exported: true })), imports: Array.from({ length: 100 }, (_, i) => `./dep${i}.js`), exports: Array.from({ length: 100 }, (_, i) => `symbol${i}`) }] };
+  const bundle = await getContext(mutated, { task: 'huge', confidence: 0.9, estimatedTokens: 1, items: [{ path: 'src/huge.ts', tier: 'symbol', score: 1, reasons: [], symbols: ['symbol0'] }] });
+  assert.equal(bundle.chunks[0]?.tier, 'metadata');
+  assert.ok((bundle.chunks[0]?.symbols.length ?? 0) <= 24);
+  assert.ok(bundle.estimatedTokens < 1_000);
+});

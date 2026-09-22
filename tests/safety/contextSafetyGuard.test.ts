@@ -4,13 +4,16 @@ import { assessContextSafety } from '../../src/safety/contextSafetyGuard.js';
 
 test('forces broader context for authentication and permission changes', () => {
   const decision = assessContextSafety('change authentication permission validation', 0.95);
-  assert.equal(decision.risk, 'elevated');
-  assert.equal(decision.forceExpansion, true);
-  assert.ok(decision.minimumConfidence >= 0.75);
+  assert.deepEqual(decision, { risk: 'elevated', minimumConfidence: 0.78, forceExpansion: true, reasons: ['authentication', 'permissions'] });
 });
 
 test('forces expansion when ordinary retrieval confidence is weak', () => {
   const decision = assessContextSafety('rename widget label', 0.2);
-  assert.equal(decision.risk, 'normal');
-  assert.equal(decision.forceExpansion, true);
+  assert.deepEqual(decision, { risk: 'normal', minimumConfidence: 0.55, forceExpansion: true, reasons: ['low-confidence'] });
+});
+
+test('preserves existing elevated classifications', () => {
+  for (const task of ['change authorization', 'rotate secrets', 'perform schema migration', 'change public API', 'fix concurrency', 'perform dependency upgrade']) {
+    assert.equal(assessContextSafety(task, 0.95).risk, 'elevated');
+  }
 });

@@ -4,29 +4,49 @@ import { rankContext } from '../../src/ranking/rankContext.js';
 import { createDependencyGraph } from '../../src/graph/dependencyGraph.js';
 import type { RepositoryIndex } from '../../src/shared/types.js';
 
-const index: RepositoryIndex = {
-  root: '/repo', generatedAt: '2026-09-21T00:00:00.000Z', files: [
-    { path: 'src/http/client.ts', language: 'typescript', bytes: 1200, hash: '1', symbols: [
-      { name: 'HttpClient', kind: 'class', startLine: 1, endLine: 20, exported: true },
-      { name: 'request', kind: 'function', startLine: 22, endLine: 30, exported: true },
-    ], imports: ['./retry.js'], exports: ['HttpClient', 'request'], isTest: false },
-    { path: 'src/http/retry.ts', language: 'typescript', bytes: 600, hash: '2', symbols: [
-      { name: 'retryRequest', kind: 'function', startLine: 1, endLine: 8, exported: true },
-    ], imports: [], exports: ['retryRequest'], isTest: false },
-    { path: 'src/unrelated/theme.ts', language: 'typescript', bytes: 400, hash: '3', symbols: [], imports: [], exports: [], isTest: false },
-  ],
-};
+const item = (path: string, symbol: string, imports: string[] = []) => ({ path, language: 'typescript', bytes: 800, hash: path, symbols: [{ name: symbol, kind: 'function' as const, startLine: 1, endLine: 5, exported: true }], imports, exports: [symbol], isTest: false });
 
-test('ranks task-matching files first and carries dependency relevance', () => {
-  const graph = createDependencyGraph(index);
-  const ranked = rankContext(index, 'add retry to HttpClient request', { graph });
-  assert.equal(ranked[0]?.path, 'src/http/client.ts');
-  const retry = ranked.find((item) => item.path === 'src/http/retry.ts');
-  assert.ok((retry?.score ?? 0) > 0);
-  assert.ok(retry?.reasons.some((reason) => reason.includes('dependency')));
+test('strong local target outranks generic infrastructure hubs', () => {
+  const index: RepositoryIndex = { root: '/repo', generatedAt: 'now', files: [
+    item('src/ledger/reconciler.ts', 'reconcileLedger', ['../shared/contextHub.js']),
+    item('src/context/buildContextPlan.ts', 'buildContextPlan', ['../shared/contextHub.js']),
+    item('src/shared/contextHub.ts', 'contextHub'),
+    item('src/ranking/rankContext.ts', 'rankContext'),
+  ] };
+  const ranked = rankContext(index, 'repair reconcileLedger context', { graph: createDependencyGraph(index) });
+  assert.equal(ranked[0]?.path, 'src/ledger/reconciler.ts');
 });
 
-test('boosts changed files without making unrelated changed code dominant', () => {
-  const ranked = rankContext(index, 'update HttpClient request', { changedPaths: ['src/unrelated/theme.ts'] });
+test('changed-only and import-only files cannot become graph anchors', () => {
+  const index: RepositoryIndex = { root: '/repo', generatedAt: 'now', files: [
+    item('src/ledger/reconciler.ts', 'reconcileLedger', ['../shared/hub.js']),
+    item('src/shared/hub.ts', 'hub'),
+    item('src/context/importOnly.ts', 'helper', ['../ledger/reconciler.js', '../shared/hub.js']),
+    item('src/changed/notes.ts', 'notes', ['../shared/hub.js']),
+  ] };
+  const ranked = rankContext(index, 'repair reconcileLedger', { graph: createDependencyGraph(index), changedPaths: ['src/changed/notes.ts'] });
+  assert.equal(ranked[0]?.path, 'src/ledger/reconciler.ts');
+  assert.ok((ranked.find((entry) => entry.path === 'src/shared/hub.ts')?.score ?? 0) < (ranked[0]?.score ?? 0));
+});
+
+test('ubiquitous common terms remain ambiguous while unique symbols are direct', () => {
+  const index: RepositoryIndex = { root: '/repo', generatedAt: 'now', files: [
+    item('src/context/one.ts', 'contextOne'), item('src/context/two.ts', 'contextTwo'), item('src/context/three.ts', 'contextThree'),
+  ] };
+  const ranked = rankContext(index, 'update context');
+  assert.ok((ranked[0]?.directScore ?? 0) < 4);
+});
+
+test('preserves positive dependency propagation for a strong direct target', () => {
+  const index: RepositoryIndex = { root: '/repo', generatedAt: 'now', files: [item('src/http/client.ts', 'httpClient', ['./retry.js']), item('src/http/retry.ts', 'retryRequest')] };
+  const ranked = rankContext(index, 'repair httpClient', { graph: createDependencyGraph(index) });
   assert.equal(ranked[0]?.path, 'src/http/client.ts');
+  assert.ok(ranked.find((entry) => entry.path === 'src/http/retry.ts')?.reasons.some((reason) => reason.startsWith('dependency:')));
+});
+
+test('unrelated changed files cannot dominate a strong task match', () => {
+  const index: RepositoryIndex = { root: '/repo', generatedAt: 'now', files: [item('src/invoice/matcher.ts', 'matchInvoice'), item('src/ui/theme.ts', 'setTheme')] };
+  const ranked = rankContext(index, 'repair matchInvoice', { changedPaths: ['src/ui/theme.ts'] });
+  assert.equal(ranked[0]?.path, 'src/invoice/matcher.ts');
+  assert.ok((ranked.find((entry) => entry.path === 'src/ui/theme.ts')?.score ?? 0) < (ranked[0]?.score ?? 0));
 });

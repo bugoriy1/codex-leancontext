@@ -5,6 +5,9 @@ import { isSecretLikePath } from '../security/secretPatterns.js';
 import { readSymbol } from './readSymbol.js';
 import type { ContextBundle, ContextChunk, ContextPlan, IndexedFile, RepositoryIndex } from '../shared/types.js';
 
+const MAX_METADATA_ENTRIES = 24;
+const MAX_SYMBOL_CHARACTERS = 24_000;
+
 async function readFreshSource(index: RepositoryIndex, file: IndexedFile): Promise<string> {
   const absolute = await resolveInsideRoot(index.root, file.path);
   const content = await readFile(absolute, 'utf8');
@@ -13,14 +16,18 @@ async function readFreshSource(index: RepositoryIndex, file: IndexedFile): Promi
 }
 
 async function chunkFor(index: RepositoryIndex, file: IndexedFile, tier: ContextChunk['tier'], symbols: string[] = []): Promise<ContextChunk> {
-  const base = { path: file.path, tier, symbols: file.symbols.map((symbol) => symbol.name), imports: file.imports, exports: file.exports };
+  const base = { path: file.path, tier, symbols: file.symbols.slice(0, MAX_METADATA_ENTRIES).map((symbol) => symbol.name), imports: file.imports.slice(0, MAX_METADATA_ENTRIES), exports: file.exports.slice(0, MAX_METADATA_ENTRIES) };
   if (tier === 'metadata') return base;
   if (isSecretLikePath(file.path)) throw new Error('Refusing to read secret-like path');
   if (tier === 'full') return { ...base, content: await readFreshSource(index, file) };
   const source = await readFreshSource(index, file);
   const selected = symbols.length > 0 ? symbols : file.symbols.slice(0, 3).map((symbol) => symbol.name);
   const slices: string[] = [];
-  for (const symbol of selected) slices.push(await readSymbol(index.root, file, symbol, source));
+  for (const symbol of selected) {
+    const slice = await readSymbol(index.root, file, symbol, source);
+    if (slice.length > MAX_SYMBOL_CHARACTERS) return { ...base, tier: 'metadata' };
+    slices.push(slice);
+  }
   return { ...base, symbols: selected, content: slices.join('\n\n') };
 }
 

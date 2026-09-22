@@ -5,16 +5,13 @@ import { hashContent } from '../index/hashFile.js';
 import { resolveInsideRoot } from '../security/pathPolicy.js';
 import { isSecretLikePath } from '../security/secretPatterns.js';
 import { getFileChunk } from './getContext.js';
+import { relatedTests } from './relatedTests.js';
 import type { ContextBundle, ContextChunk, ExpansionRequest, IndexedFile, RepositoryIndex } from '../shared/types.js';
 
 function tokenEstimate(chunks: ContextChunk[]): number {
   return Math.ceil(chunks.reduce((sum, chunk) => sum + (chunk.content?.length ?? JSON.stringify(chunk).length), 0) / 4);
 }
 
-function matchingTests(index: RepositoryIndex, target: string): IndexedFile[] {
-  const base = path.posix.basename(target).replace(/\.[^.]+$/, '');
-  return index.files.filter((file) => file.isTest && (file.path.includes(base) || file.imports.some((specifier) => specifier.includes(base))));
-}
 
 async function explicitFile(index: RepositoryIndex, requestedPath: string): Promise<ContextChunk> {
   if (isSecretLikePath(requestedPath)) throw new Error('Refusing to read secret-like path');
@@ -100,7 +97,7 @@ export async function expandContext(index: RepositoryIndex, request: ExpansionRe
     chunks = await Promise.all(paths.map((filePath) => byPath.get(filePath)).filter((value): value is IndexedFile => Boolean(value)).map((file) => getFileChunk(index, file, 'metadata')));
   } else if (request.relation === 'tests') {
     if (!request.path) throw new Error('path is required');
-    chunks = await Promise.all(matchingTests(index, request.path).map((file) => getFileChunk(index, file, 'metadata')));
+    chunks = await Promise.all(relatedTests(index, request.path).map((file) => getFileChunk(index, file, 'metadata')));
   } else if (request.relation === 'directory') {
     if (!request.path) throw new Error('path is required');
     const directory = path.posix.dirname(request.path.replaceAll('\\', '/'));

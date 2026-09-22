@@ -8,7 +8,6 @@ import path from 'node:path';
 import { createDispatcher } from '../../src/mcp/server.js';
 
 const execFileAsync = promisify(execFile);
-
 async function repo() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'lean-mcp-repo-'));
   await mkdir(path.join(root, 'src'));
@@ -17,43 +16,33 @@ async function repo() {
   return root;
 }
 
-test('lists all public LeanContext tools', async () => {
-  const dispatch = createDispatcher();
-  const response = await dispatch({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
-  const tools = (response.result as { tools: Array<{ name: string }> }).tools.map((tool) => tool.name).sort();
-  assert.deepEqual(tools, [
-    'leancontext_changed_context',
-    'leancontext_context_plan',
-    'leancontext_expand',
-    'leancontext_get_context',
-    'leancontext_index',
-    'leancontext_token_report',
-  ]);
-});
-
-test('indexes a repo then builds and retrieves a task plan by planId', async () => {
+test('one-call context gives content-only clients useful compact source without payload duplication', async () => {
   const root = await repo();
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), 'lean-mcp-data-'));
-  const dispatch = createDispatcher({ dataRoot });
-  const indexResponse = await dispatch({
-    jsonrpc: '2.0', id: 2, method: 'tools/call',
-    params: { name: 'leancontext_index', arguments: { root } },
-  });
-  const indexed = (indexResponse.result as { structuredContent: { fileCount: number } }).structuredContent;
-  assert.equal(indexed.fileCount, 1);
+  const response = await createDispatcher({ dataRoot })({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'leancontext_context', arguments: { root, task: 'change greet function' } } });
+  const result = response.result as { content: Array<{ text: string }>; structuredContent?: unknown };
+  assert.equal(result.structuredContent, undefined);
+  assert.equal(result.content.length, 1);
+  const payload = JSON.parse(result.content[0]?.text ?? '{}') as { planId?: string; estimatedTokens: number; context: Array<{ path: string; tier: string; content?: string; symbols?: unknown }> };
+  assert.equal(payload.planId, undefined);
+  assert.ok(payload.estimatedTokens > 0);
+  const chunk = payload.context.find((candidate) => candidate.path === 'src/greet.ts');
+  assert.match(chunk?.content ?? '', /function greet/);
+  assert.ok(chunk?.tier === 'full' || Array.isArray(chunk?.symbols));
+});
 
-  const planResponse = await dispatch({
-    jsonrpc: '2.0', id: 3, method: 'tools/call',
-    params: { name: 'leancontext_context_plan', arguments: { root, task: 'change greet function' } },
-  });
-  const planned = (planResponse.result as { structuredContent: { planId: string; plan: { items: Array<{ path: string }> } } }).structuredContent;
-  assert.ok(planned.planId.length > 8);
-  assert.ok(planned.plan.items.some((item) => item.path === 'src/greet.ts'));
-
-  const contextResponse = await dispatch({
-    jsonrpc: '2.0', id: 4, method: 'tools/call',
-    params: { name: 'leancontext_get_context', arguments: { planId: planned.planId } },
-  });
-  const context = (contextResponse.result as { structuredContent: { chunks: Array<{ path: string }> } }).structuredContent;
-  assert.ok(context.chunks.some((chunk) => chunk.path === 'src/greet.ts'));
+test('legacy context-plan and get-context execute only with compatibility flag', async () => {
+  const oldValue = process.env.LEANCONTEXT_LEGACY_TOOLS;
+  process.env.LEANCONTEXT_LEGACY_TOOLS = '1';
+  try {
+    const root = await repo();
+    const dispatch = createDispatcher({ dataRoot: await mkdtemp(path.join(os.tmpdir(), 'lean-mcp-data-')) });
+    const indexed = await dispatch({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'leancontext_index', arguments: { root } } });
+    assert.equal((JSON.parse(((indexed.result as { content: Array<{ text: string }> }).content[0]?.text ?? '{}')) as { fileCount: number }).fileCount, 1);
+    const planned = await dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'leancontext_context_plan', arguments: { root, task: 'change greet' } } });
+    const planId = (JSON.parse(((planned.result as { content: Array<{ text: string }> }).content[0]?.text ?? '{}')) as { planId: string }).planId;
+    assert.ok(planId.length > 8);
+    const context = await dispatch({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'leancontext_get_context', arguments: { planId } } });
+    assert.match((context.result as { content: Array<{ text: string }> }).content[0]?.text ?? '', /src\/greet.ts/);
+  } finally { if (oldValue === undefined) delete process.env.LEANCONTEXT_LEGACY_TOOLS; else process.env.LEANCONTEXT_LEGACY_TOOLS = oldValue; }
 });

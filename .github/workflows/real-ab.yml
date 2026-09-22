@@ -159,10 +159,10 @@ jobs:
           output-file: leancontext-final.md
           prompt: >-
             ${{ env.AB_TASK }}
-            Before broad repository exploration, use the LeanContext MCP tools to plan
-            the minimum sufficient context. Start with leancontext_context_plan and
-            retrieve that context. Expand context whenever correctness requires it;
-            never preserve token savings at the expense of implementation quality.
+            Before broad repository exploration, call leancontext_context first and use
+            its returned source directly. Call leancontext_expand only when correctness
+            requires more context; never preserve token savings at the expense of
+            implementation quality.
 
       - name: Capture LeanContext diff
         if: always()

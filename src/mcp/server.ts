@@ -6,6 +6,8 @@ import { getContext } from '../context/getContext.js';
 import { getChangedPaths } from '../git/changedContext.js';
 import { indexProject, planProject, tokenReport } from '../service/projectService.js';
 import type { ContextPlan, ExpansionRelation, RepositoryIndex } from '../shared/types.js';
+import { assessContextSafety } from '../safety/contextSafetyGuard.js';
+import type { ContextBundle, ContextChunk } from '../shared/types.js';
 
 type JsonRpcId = string | number | null;
 
@@ -32,7 +34,20 @@ interface StoredPlan {
   plan: ContextPlan;
 }
 
-const tools = [
+const leanTools = [
+  {
+    name: 'leancontext_context',
+    description: 'First repository-inspection action: index, plan, and return compact initial context in one call. Expand whenever correctness requires it.',
+    inputSchema: { type: 'object', properties: { root: { type: 'string' }, task: { type: 'string' }, tokenBudget: { type: 'number' } }, required: ['root', 'task'], additionalProperties: false },
+  },
+  {
+    name: 'leancontext_expand',
+    description: 'Expand context when the initial context is insufficient.',
+    inputSchema: { type: 'object', properties: { root: { type: 'string' }, relation: { type: 'string', enum: ['callers', 'callees', 'imports', 'importers', 'tests', 'directory', 'symbol', 'file'] }, path: { type: 'string' }, symbol: { type: 'string' } }, required: ['root', 'relation'], additionalProperties: false },
+  },
+] as const;
+
+const legacyTools = [
   {
     name: 'leancontext_index',
     description: 'Create or incrementally refresh the local repository metadata index. Source code is not stored in the cache.',
@@ -78,10 +93,21 @@ const tools = [
 function toolResult(data: unknown) {
   return {
     content: [{ type: 'text', text: JSON.stringify(data) }],
-    structuredContent: data,
     isError: false,
   };
 }
+
+function compactChunk(chunk: ContextChunk) {
+  if (chunk.tier === 'full') return { path: chunk.path, tier: chunk.tier, content: chunk.content };
+  if (chunk.tier === 'symbol') return { path: chunk.path, tier: chunk.tier, symbols: chunk.symbols, content: chunk.content };
+  return { path: chunk.path, tier: chunk.tier, symbols: chunk.symbols, imports: chunk.imports, exports: chunk.exports };
+}
+
+function compactBundle(bundle: ContextBundle) {
+  return { estimatedTokens: bundle.estimatedTokens, chunks: bundle.chunks.map(compactChunk) };
+}
+
+function exposedTools() { return process.env.LEANCONTEXT_LEGACY_TOOLS === '1' ? [...leanTools, ...legacyTools.filter((tool) => tool.name !== 'leancontext_expand')] : leanTools; }
 
 function toolError(message: string) {
   return {
@@ -104,19 +130,29 @@ export function createDispatcher(options: DispatcherOptions = {}) {
           protocolVersion: '2025-06-18',
           capabilities: { tools: {} },
           serverInfo: { name: 'codex-leancontext', version: '0.1.0' },
-          instructions: 'Call leancontext_context_plan before broad repository exploration. Treat it as a starting point. If correctness needs more information, call leancontext_expand or inspect source directly. Never preserve token savings at the expense of implementation quality.',
+          instructions: 'Use leancontext_context as the FIRST repository-inspection action. Do not run broad rg/find/cat exploration before it unless the tool fails or its context is insufficient. Expand whenever correctness requires it. Never trade correctness for token savings.',
         },
       };
     }
 
     if (request.method === 'ping') return { jsonrpc: '2.0', id, result: {} };
-    if (request.method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools } };
+    if (request.method === 'tools/list') return { jsonrpc: '2.0', id, result: { tools: exposedTools() } };
 
     if (request.method === 'tools/call') {
       const params = request.params as { name?: string; arguments?: Record<string, unknown> } | undefined;
       const name = params?.name ?? '';
       const args = params?.arguments ?? {};
       try {
+        if (name === 'leancontext_context') {
+          const root = String(args.root ?? '');
+          const task = String(args.task ?? '');
+          const tokenBudget = typeof args.tokenBudget === 'number' ? args.tokenBudget : undefined;
+          const planned = await planProject(root, task, { ...options, ...(tokenBudget !== undefined ? { tokenBudget } : {}) });
+          const safety = assessContextSafety(task, planned.plan.confidence);
+          const context = compactBundle(await getContext(planned.index, planned.plan));
+          return { jsonrpc: '2.0', id, result: toolResult({ confidence: planned.plan.confidence, safetyRisk: safety.risk, estimatedTokens: context.estimatedTokens, context: context.chunks }) };
+        }
+        if (name !== 'leancontext_expand' && process.env.LEANCONTEXT_LEGACY_TOOLS !== '1') return { jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown tool: ${name}` } };
         if (name === 'leancontext_index') {
           const root = String(args.root ?? '');
           const built = await indexProject(root, options);
@@ -135,7 +171,7 @@ export function createDispatcher(options: DispatcherOptions = {}) {
           const planId = String(args.planId ?? '');
           const stored = plans.get(planId);
           if (!stored) return { jsonrpc: '2.0', id, result: toolError(`Unknown or expired planId: ${planId}`) };
-          return { jsonrpc: '2.0', id, result: toolResult(await getContext(stored.index, stored.plan)) };
+          return { jsonrpc: '2.0', id, result: toolResult(compactBundle(await getContext(stored.index, stored.plan))) };
         }
         if (name === 'leancontext_expand') {
           const root = String(args.root ?? '');
@@ -146,7 +182,7 @@ export function createDispatcher(options: DispatcherOptions = {}) {
             ...(typeof args.path === 'string' ? { path: args.path } : {}),
             ...(typeof args.symbol === 'string' ? { symbol: args.symbol } : {}),
           };
-          return { jsonrpc: '2.0', id, result: toolResult(await expandContext(built.index, requestArgs)) };
+          return { jsonrpc: '2.0', id, result: toolResult(compactBundle(await expandContext(built.index, requestArgs))) };
         }
         if (name === 'leancontext_changed_context') {
           const root = String(args.root ?? '');

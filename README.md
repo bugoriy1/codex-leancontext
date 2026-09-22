@@ -24,20 +24,16 @@ When relevance is weak or the task touches authentication, permissions, cryptogr
 - Dynamic expansion: `imports`, `importers`, `tests`, `directory`, `symbol`, `file`, plus heuristic `callers`/`callees` discovery.
 - Git working-tree delta awareness.
 - Token/context telemetry.
-- Local stdio MCP server with six tools.
+- Local stdio MCP server with a two-tool default surface.
 - CLI and a bundled Codex Skill.
 - Planning-only benchmark that is explicitly labeled `estimated`.
 
 ## MCP tools
 
-- `leancontext_index`
-- `leancontext_context_plan`
-- `leancontext_get_context`
+- `leancontext_context`
 - `leancontext_expand`
-- `leancontext_changed_context`
-- `leancontext_token_report`
 
-`leancontext_context_plan` returns a short `planId`. The server keeps the detailed plan in memory so subsequent calls do not need to echo the whole plan back through model context.
+Call `leancontext_context` first. It indexes/caches, plans, and returns compact initial source context in one call. Use `leancontext_expand` only when more context is required for correctness. Set `LEANCONTEXT_LEGACY_TOOLS=1` only for compatibility with the legacy index/plan/get/report tools.
 
 ## Build from source
 
