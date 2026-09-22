@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { expandContext } from '../context/expandContext.js';
 import { getContext } from '../context/getContext.js';
+import { projectConstraints } from '../context/projectConstraints.js';
 import { getChangedPaths } from '../git/changedContext.js';
 import { indexProject, planProject, tokenReport } from '../service/projectService.js';
 import type { ContextPlan, ExpansionRelation, RepositoryIndex } from '../shared/types.js';
@@ -150,7 +151,7 @@ export function createDispatcher(options: DispatcherOptions = {}) {
           const planned = await planProject(root, task, { ...options, ...(tokenBudget !== undefined ? { tokenBudget } : {}) });
           const safety = assessContextSafety(task, planned.plan.confidence);
           const context = compactBundle(await getContext(planned.index, planned.plan));
-          return { jsonrpc: '2.0', id, result: toolResult({ confidence: planned.plan.confidence, safetyRisk: safety.risk, estimatedTokens: context.estimatedTokens, context: context.chunks }) };
+          return { jsonrpc: '2.0', id, result: toolResult({ confidence: planned.plan.confidence, safetyRisk: safety.risk, projectConstraints: await projectConstraints(planned.index.root), estimatedTokens: context.estimatedTokens, context: context.chunks }) };
         }
         if (name !== 'leancontext_expand' && process.env.LEANCONTEXT_LEGACY_TOOLS !== '1') return { jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown tool: ${name}` } };
         if (name === 'leancontext_index') {
