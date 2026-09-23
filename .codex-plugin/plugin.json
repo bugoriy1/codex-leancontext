@@ -1,0 +1,7 @@
+{
+  "name": "codex-leancontext",
+  "version": "0.1.0",
+  "description": "Task-aware context optimizer for Codex.",
+  "skills": "./skills/",
+  "mcpServers": "./mcp.json"
+}

@@ -1,0 +1,229 @@
+name: LeanContext Real A-B
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/leancontext-v0.1
+    paths:
+      - '.github/ab-trigger.txt'
+
+permissions:
+  contents: read
+
+env:
+  AB_MODEL: gpt-5.6-sol
+  AB_EFFORT: medium
+  AB_TASK: >-
+    Extend LeanContext's context-safety classifier so tasks involving OAuth or OIDC,
+    API keys, credentials, and access or bearer tokens are treated as elevated risk.
+    Do not classify ordinary token-budget or token-count tasks as elevated merely
+    because the word token appears. Add regression tests and preserve all existing
+    behavior. Run the relevant verification. Do not ask questions; make the change.
+
+jobs:
+  baseline:
+    name: A - Baseline Codex
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Install project dependencies
+        run: npm install
+
+      - name: Build starting project
+        run: npm run build
+
+      - name: Prepare baseline Codex home
+        run: mkdir -p "$RUNNER_TEMP/codex-home-baseline"
+
+      - name: Run baseline Codex
+        id: codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-home: ${{ runner.temp }}/codex-home-baseline
+          permission-profile: ":workspace"
+          model: ${{ env.AB_MODEL }}
+          effort: ${{ env.AB_EFFORT }}
+          codex-args: '["--json","--ephemeral"]'
+          output-file: baseline-final.md
+          prompt: ${{ env.AB_TASK }}
+
+      - name: Capture baseline diff
+        if: always()
+        run: git diff -- . ':!.github' > baseline.diff
+
+      - name: Verify baseline implementation
+        id: verify
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test
+          npm run typecheck
+          npm run lint
+          npm run build
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { assessContextSafety } from './dist/src/safety/contextSafetyGuard.js';
+
+          const elevated = [
+            'rotate OAuth client credentials',
+            'change OIDC authentication flow',
+            'replace API key validation',
+            'update stored credentials',
+            'refresh bearer access token handling',
+          ];
+          const normal = [
+            'reduce token budget for context planning',
+            'rename token count label',
+          ];
+
+          for (const task of elevated) {
+            const result = assessContextSafety(task, 0.95);
+            assert.equal(result.risk, 'elevated', `expected elevated risk: ${task}`);
+            assert.equal(result.forceExpansion, true, `expected forced expansion: ${task}`);
+          }
+          for (const task of normal) {
+            const result = assessContextSafety(task, 0.95);
+            assert.equal(result.risk, 'normal', `expected normal risk: ${task}`);
+          }
+          console.log('Independent acceptance verifier: PASS');
+          NODE
+
+      - name: Baseline summary
+        if: always()
+        run: |
+          {
+            echo "## A — Baseline Codex"
+            echo ""
+            echo "- Model: `$AB_MODEL`"
+            echo "- Effort: `$AB_EFFORT`"
+            echo "- Independent verification: **${{ steps.verify.outcome }}**"
+            echo "- Token usage: read the final `turn.completed.usage` JSONL event in the Codex step log."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload baseline artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ab-baseline
+          path: |
+            baseline.diff
+            baseline-final.md
+          retention-days: 30
+
+  leancontext:
+    name: B - Codex + LeanContext
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Install project dependencies
+        run: npm install
+
+      - name: Build starting project
+        run: npm run build
+
+      - name: Prepare LeanContext MCP config
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/codex-home-lean"
+          cat > "$RUNNER_TEMP/codex-home-lean/config.toml" <<EOF
+          [mcp_servers.leancontext]
+          command = "node"
+          args = ["$GITHUB_WORKSPACE/dist/src/mcp/server.js"]
+          cwd = "$GITHUB_WORKSPACE"
+          required = true
+          EOF
+
+      - name: Run Codex with LeanContext
+        id: codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-home: ${{ runner.temp }}/codex-home-lean
+          permission-profile: ":workspace"
+          model: ${{ env.AB_MODEL }}
+          effort: ${{ env.AB_EFFORT }}
+          codex-args: '["--json","--ephemeral"]'
+          output-file: leancontext-final.md
+          prompt: >-
+            ${{ env.AB_TASK }}
+            Before broad repository exploration, call leancontext_context first and use
+            its returned source directly. Call leancontext_expand only when correctness
+            requires more context; never preserve token savings at the expense of
+            implementation quality.
+
+      - name: Capture LeanContext diff
+        if: always()
+        run: git diff -- . ':!.github' > leancontext.diff
+
+      - name: Verify LeanContext implementation
+        id: verify
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test
+          npm run typecheck
+          npm run lint
+          npm run build
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { assessContextSafety } from './dist/src/safety/contextSafetyGuard.js';
+
+          const elevated = [
+            'rotate OAuth client credentials',
+            'change OIDC authentication flow',
+            'replace API key validation',
+            'update stored credentials',
+            'refresh bearer access token handling',
+          ];
+          const normal = [
+            'reduce token budget for context planning',
+            'rename token count label',
+          ];
+
+          for (const task of elevated) {
+            const result = assessContextSafety(task, 0.95);
+            assert.equal(result.risk, 'elevated', `expected elevated risk: ${task}`);
+            assert.equal(result.forceExpansion, true, `expected forced expansion: ${task}`);
+          }
+          for (const task of normal) {
+            const result = assessContextSafety(task, 0.95);
+            assert.equal(result.risk, 'normal', `expected normal risk: ${task}`);
+          }
+          console.log('Independent acceptance verifier: PASS');
+          NODE
+
+      - name: LeanContext summary
+        if: always()
+        run: |
+          {
+            echo "## B — Codex + LeanContext"
+            echo ""
+            echo "- Model: `$AB_MODEL`"
+            echo "- Effort: `$AB_EFFORT`"
+            echo "- Independent verification: **${{ steps.verify.outcome }}**"
+            echo "- Token usage: read the final `turn.completed.usage` JSONL event in the Codex step log."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload LeanContext artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ab-leancontext
+          path: |
+            leancontext.diff
+            leancontext-final.md
+          retention-days: 30
