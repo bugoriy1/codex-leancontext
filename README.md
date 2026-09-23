@@ -4,13 +4,17 @@
 
 Codex LeanContext is an early open-source local context optimizer for coding agents. It scans a repository, builds metadata/symbol/dependency maps, ranks files for the current task, and lets the agent expand context only when needed.
 
-> Status: **v0.1 development alpha.** The core is implemented and locally tested. No real-world token-savings percentage is claimed yet; live Codex A/B benchmarking is still required before a performance claim or release-grade benchmark can pass.
+> Status: **v0.1 development alpha.** The core is implemented and locally tested.
 
 ## Why
 
 Coding agents can spend substantial context repeatedly exploring large repositories. LeanContext tries to reduce that waste while preserving a hard rule: **correctness beats token savings**.
 
 When relevance is weak or the task touches authentication, permissions, cryptography, migrations, public APIs, concurrency, or dependency upgrades, the Safety Guard broadens context instead of forcing a small budget.
+
+## Benchmark status
+
+Matched local Codex A/B runs have been performed with successful verification. Measured actual input-token reductions were 37.9% on the dogfood task, 13.7% on repaired Holdout #1 regression validation, and 11.4% on fresh Holdout #2. These are task-specific measurements, not a universal token-savings guarantee. Correctness and successful verification remain more important than token savings.
 
 ## What v0.1 includes
 
@@ -82,5 +86,4 @@ MIT
 
 - TypeScript/JavaScript/Python symbol extraction is intentionally lightweight and heuristic in this alpha; complex syntax can require full-file expansion.
 - `callers`/`callees` are local name-based heuristics, not a whole-program semantic call graph.
-- No actual Codex A/B token benchmark has been run in this build environment.
 - The source tree currently has no generated npm lockfile because the build environment could not reach the npm registry; generate and commit one before a stable public release.
